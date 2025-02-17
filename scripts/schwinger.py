@@ -11,6 +11,7 @@ using the --continue option.
 """
 
 import time
+import argparse
 
 from neumc.training.gradient_estimator import REINFORCEEstimator
 from neumc.utils.utils import dkl, ess
@@ -23,6 +24,16 @@ from neumc.nf.u1_model_asm import assemble_model_from_dict
 import neumc.physics.schwinger as sch
 import neumc.utils.stats_utils as stats_utils
 
+parser = argparse.ArgumentParser("Schwinger")
+
+parser.add_argument("--batch-size", type=int, default=2**10, help="Batch size for training")
+parser.add_argument("--n-batches", type=int, default=1)
+parser.add_argument("--n-eras", type=int, default=4, help="Number of training eras")
+parser.add_argument("-n-updates-per-era", type=int, default=50, help="Number of batch updates per era")
+
+args = parser.parse_args()
+
+
 if torch.cuda.is_available():
     torch_device = "cuda"
 else:
@@ -31,7 +42,8 @@ else:
 
 L = 8
 
-float_dtype = "float32"
+float_dtype = torch.float32
+
 
 config = {
     "device": torch_device,
@@ -40,7 +52,7 @@ config = {
     "phys_model": {"name": "U1", "parameters": {"beta": 1.0, "kappa": 0.276}},
     "model": {
         "n_layers": 48,
-        "masking": "2x1",
+        "masking": "schwinger",
         "coupling": "cs",
         "nn": {
             "hidden_channels": [64, 64],
@@ -48,15 +60,15 @@ config = {
             "dilation": [1, 2, 3],
         },
         "n_knots": 9,
-        "float_dtype": "float32",
+        "float_dtype": torch.float32,
         "lattice_shape": [L, L],
     },
     "train": {
-        "batch_size": 512,
-        "n_batches": 2,
+        "batch_size": args.batch_size,
+        "n_batches": args.n_batches,
         "loss": "REINFORCE",
-        "n_eras": 4,
-        "n_epochs_per_era": 50,
+        "n_eras": args.n_eras,
+        "n_epochs_per_era": args.n_updates_per_era,
         "optimizer": {"name": "Adam", "kwargs": {"lr": 0.00025}},
     },
     "sampling": {

@@ -44,17 +44,17 @@ class CouplingLayer(Transformation):
 
         parameters_ = self.conditioner(*x_frozen)
         if dir == 0:
-            z_active, log_J_ = self.transform(
+            z_active, log_J = self.transform(
                 xs[0], active_mask=self.mask[0]["active"], parameters=parameters_
             )
         else:
-            z_active, log_J_ = self.transform.reverse(
+            z_active, log_J = self.transform.reverse(
                 xs[0], active_mask=self.mask[0]["active"], parameters=parameters_
             )
 
         z = self.mask[0]["active"] * z_active + x_passive + x_frozen[0]
 
-        return z, log_J_
+        return z, log_J
 
     @override
     def forward(

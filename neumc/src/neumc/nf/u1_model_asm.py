@@ -8,8 +8,7 @@ import torch
 
 from neumc.nf.cs_coupling import CSCoupling
 from neumc.nf import ncp as nc
-from neumc.nf.sch_masks import schwinger_masks_with_2x1_loops, schwinger_masks
-from neumc.nf.u1_masks import u1_masks
+from neumc.nf.gauge_masks import u1_masks_gen, sch_2x1_masks_gen, sch_masks_gen
 import neumc.nf.u1_equiv
 from neumc.nf.nn import make_conv_net
 from neumc.physics import u1
@@ -33,28 +32,26 @@ def assemble_model_from_dict(config, device, *, verbose=0):
     float_dtype = config["float_dtype"]
     nn = config["nn"]
 
-    link_mask_shape = (len(lattice_shape),) + tuple(lattice_shape)
+
     match masking:
         case "schwinger":
-            masks = schwinger_masks(
-                plaq_mask_shape=lattice_shape,
-                link_mask_shape=link_mask_shape,
+            masks = sch_masks_gen(
+                lattice_shape=lattice_shape,
                 float_dtype=float_dtype,
                 device=device,
             )
             loops_function = None
             in_channels = 2
         case "2x1":
-            masks = schwinger_masks_with_2x1_loops(
-                plaq_mask_shape=lattice_shape,
-                link_mask_shape=link_mask_shape,
+            masks = sch_2x1_masks_gen(
+                lattice_shape=lattice_shape,
                 float_dtype=float_dtype,
                 device=device,
             )
             loops_function = lambda x: [u1.compute_u1_2x1_loops(x)]
             in_channels = 6
         case "u1":
-            masks = u1_masks(
+            masks = u1_masks_gen(
                 lattice_shape=lattice_shape, float_dtype=float_dtype, device=device
             )
             loops_function = None

@@ -47,7 +47,7 @@ model_cfg = {
         "dilation": [1, 2, 3],
     },
     "n_knots": 9,
-    "float_dtype": "float32",
+    "float_dtype": torch.float32,
     "lattice_shape": lattice_shape,
 }
 

@@ -8,8 +8,6 @@ __all__ = [
     "flow",
     "ncp",
     "nn",
-    "sch_masks",
-    "u1_masks",
     "u1_equiv",
     "u1_model_asm",
     "utils",
@@ -18,14 +16,13 @@ __all__ = [
     "coupling_flow",
     "scalar_masks",
     "cs_coupling",
+    "gauge_masks"
 ]
 
 from . import affine_cpl
 from . import flow
 from . import ncp
 from . import nn
-from . import sch_masks
-from . import u1_masks
 from . import u1_equiv
 from . import u1_model_asm
 from . import utils
@@ -34,3 +31,4 @@ from . import flow_abc
 from . import coupling_flow
 from . import scalar_masks
 from . import cs_coupling
+from . import gauge_masks

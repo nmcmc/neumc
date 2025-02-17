@@ -1,6 +1,11 @@
 # TODO: Add docstring to this file
 import torch
 
+def _make_list(k, n):
+    if isinstance(k, int):
+        return [k]*n
+    else:
+        return k
 
 def make_conv_net(
     *,
@@ -33,16 +38,14 @@ def make_conv_net(
     """
     sizes = [in_channels] + hidden_channels + [out_channels]
     net = []
-    if isinstance(dilation, int):
-        dilations = [dilation] * (len(hidden_channels) + 1)
-    else:
-        dilations = dilation
+    dilations = _make_list(dilation, len(sizes)-1)
+    kernel_sizes = _make_list(kernel_size, len(sizes)-1)
     for i in range(len(sizes) - 1):
         net.append(
             torch.nn.Conv2d(
                 sizes[i],
                 sizes[i + 1],
-                kernel_size,
+                kernel_sizes[i],
                 padding=dilations[i] * (kernel_size - 1) // 2,
                 stride=1,
                 padding_mode="circular",

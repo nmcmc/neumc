@@ -52,7 +52,7 @@ sampling_batch_size = 2**10
 n_boot_samples = 100
 boot_bin_size = 1
 
-float_dtype = "float32"
+float_dtype = torch.float32
 
 config = {
     "layers": {
@@ -72,11 +72,11 @@ nn_cfg = layers_cfg["nn"]
 action = neumc.physics.u1.U1GaugeAction(beta)
 
 
-masks = neumc.nf.u1_masks.u1_masks(
+masks = neumc.nf.gauge_masks.u1_masks_gen(
     lattice_shape=lattice_shape, float_dtype=float_dtype, device=torch_device
 )
 
-# masks = neumc.nf.sch_masks.schwinger_masks_with_2x1_loops(
+# masks = neumc.nf.gauge_masks.schwinger_masks_with_2x1_loops(
 #     plaq_mask_shape=lattice_shape,
 #     link_mask_shape=(len(lattice_shape), *lattice_shape),
 #     float_dtype=float_dtype,
