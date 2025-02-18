@@ -1,4 +1,4 @@
-Copyright (c) 2023 P. Bialas, P. Korcyl, T. Stebel
+Copyright (c) 2023 P. Bialas, P. Korcyl, T. Stebel, D. Zapolski
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

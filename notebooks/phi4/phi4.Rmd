@@ -1,0 +1,1062 @@
+---
+jupyter:
+  jupytext:
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.2'
+      jupytext_version: 1.16.4
+  kernelspec:
+    display_name: Python 3 (ipykernel)
+    language: python
+    name: python3
+---
+
+```{python}
+# %load_ext autoreload
+# %autoreload 2
+```
+
+```{html}
+<style>
+.tt {
+    font-family:monospace;
+    font-size:110%;
+}    
+</style>
+```
+
+```{python}
+import torch
+import numpy as np
+import matplotlib.pyplot as plt
+```
+
+```{python}
+print(f"Running on PyTorch {torch.__version__}")
+```
+
+The model will run on a GPU if available
+
+```{python}
+float_dtype = "float32"
+torch_float_dtype = getattr(torch, float_dtype)
+```
+
+```{python}
+if torch.cuda.is_available():
+    torch_device = "cuda"
+    print(f"Running on {torch.cuda.get_device_name(torch_device)}")
+    if float_dtype == 'float64':
+        print("Double precision on gaming GPUs is much slower than the single precision!")
+else:
+    torch_device = 'cpu'
+print(f"torch device = {torch_device}")
+```
+
+# $\phi^4$ lattice field theory
+
+
+In this notebook we will be studying the $\phi^4$ scalar field model
+
+
+\begin{equation}
+S[\phi|m^2,\lambda] =    \int\text{d}x \left(
+   \frac{1}{2} \sum_{\mu=0,1}(\partial_\mu\phi(x))^2+\frac{1}{2}m^2\phi^2(x)+\frac{1}{4!}\lambda\phi^4(x)
+    \right)
+\end{equation}
+
+
+ On the lattice we use the discretized version of the action
+
+
+\begin{equation}
+\begin{split}
+    S(\mathbf{\phi}|m^2,\lambda) &= \frac{1}{2}\sum_{i,j=0}^{L-1}
+    \left( 
+    (\phi_{i+1,j}-\phi_{i,j})^2 + (\phi_{i,j+1}-\phi_{i,j})^2\right)\\
+    &\phantom{=}+\sum_{i,j=0}^{L-1}\left(\frac{m^2}{2}\phi_{i,j}^2+\frac{\lambda}{4!}\phi_{i,j}^4\right),
+\end{split}    
+\end{equation}
+
+
+with periodic boundary conditions
+
+
+$$\phi_{L,j}=\phi_{0,j},\quad \phi_{i,L}=\phi_{i,0}$$
+
+
+After expanding the squares in the first term we obtain
+
+
+\begin{equation}
+\begin{split}
+    S(\mathbf{\phi}|m^2,\lambda) &=\sum_{i,j=0}^{L-1}
+    \left( 
+    (\phi_{i,j}^2-\phi_{i+1,j} \phi_{i,j}) + (\phi_{i,j}^2-\phi_{i,j+1} \phi_{i,j})\right)\\
+    &\phantom{=}+\sum_{i,j=0}^{L-1}\left(\frac{m^2}{2}\phi_{i,j}^2+\frac{\lambda}{4!}\phi_{i,j}^4\right)\\
+    &= -\sum_{i,j=0}^{L-1}
+    \left(\phi_{i+1,j} \phi_{i,j}+\phi_{i,j+1} \phi_{i,j}\right)
+    +\sum_{i,j=0}^{L-1}\left(\left(\frac{m^2}{2}+2\right)\phi_{i,j}^2+\frac{\lambda}{4!}\phi_{i,j}^4\right)
+\end{split}    
+\end{equation}
+
+
+We have used the fact that 
+
+
+$$\sum_{i,j}\phi_{i+1,j}^2=\sum_{i,j}\phi_{i,j+j}^2=\sum_{i,j}\phi_{i,j}^2$$
+
+
+ The last expression is used to implement the action in the `neumc` package.
+
+
+## $\phi^4$ potential
+
+
+The second term in the expression above defines the _potential_.  Please note that parameter $m^2$ can be negative. For $\lambda>0$ and $m^2<0$ this potential has two minima and can lead to _spontaneous symmetry breaking_ signaling a _phase transition_ from disordered to ordered state. This is described in more detail in the ssb (spontaneous symmetry breaking) notebook.
+
+```{python}
+xs = np.linspace(-4, 4, 500)
+for M2, lamda in [(1.0, 0.0), (1, 1), (0.0, 1.0), (-0.5, 1.0), (-1.0, 1.0)]:
+    plt.plot(xs, 0.5 * M2 * xs ** 2 + lamda / 24 * xs ** 4, label=f"$m^2={M2:>.2f}$ $\\lambda={lamda}$");
+plt.legend();
+```
+
+## Partition function and the free energy
+
+
+The probability of a configuration $\mathbf\phi$ is
+
+
+$$p(\mathbf\phi)=Z^{-1}(m^2,\lambda) e^{\displaystyle -S(\phi|m^2, \lambda)}$$
+
+
+where $Z(m^2,\lambda)$ is a normalizing constant
+
+
+$$Z(m^2,\lambda)=\int\text{d}\mathbf\phi\, e^{\displaystyle -S(\phi|m^2, \lambda)}$$
+
+
+and is called the _partition function_. Its logarithm is called _free energy_  (in the following we will omit the $m^2$ and $\lambda$ arguments to both functions)
+
+
+$$F =  -\log Z.$$
+
+
+### Free field ($\lambda = 0$)
+
+
+When $\lambda=0$ the theory is non-interacting and the free energy can be exactly calculated
+
+
+$$
+F = -\log Z = -\frac{1}{2}L^2\log(2\pi)+\frac{1}{2}\sum_{q_0,q_1=0}^{L-1}\log\left(4 \sum_{m=0}^1 \sin\left(\frac{\pi}{L}q_\mu\right)^2+m^2)\right)
+$$
+
+
+This formula is only valid for $m^2>0$.
+
+```{python}
+import neumc
+```
+
+```{python}
+L = 8
+```
+
+```{python}
+lattice_shape = (L, L)
+```
+
+We will train a non-interacting field model as to be able to compare the results with the exact analytical expression
+
+```{python}
+m2 = 1.25
+lam = 0.0
+phi4_action = neumc.physics.phi4.ScalarPhi4Action(m2=m2, lam=lam)
+```
+
+## Normalizing flows
+
+
+An normalizing flow in general consists of two parts: a prior distribution $q_z(z)$ for the random variable $Z$ and a function $\varphi(z)$. Provided $\varphi$ is a bijection the distribution of the random variable $\varPhi=\varphi(Z)$ is
+
+
+\begin{equation}
+    q(\phi)= q_z(z) \equiv  q_{pr}(z)\left|J(z)^{-1}\right|,\quad \phi=\varphi(z),
+\end{equation}
+
+
+where
+
+
+\begin{equation}
+    J(z)=\det \frac{\partial \varphi(z)}{\partial z}=\det\begin{bmatrix}
+    \frac{\partial \varphi_1(z)}{\partial z_1} & \cdots &\frac{\partial \varphi_1(z)}{\partial z_n} \\
+    \vdots & \ddots & \vdots \\
+    \frac{\partial \varphi_n(z)}{\partial z_1} & \cdots &\frac{\partial \varphi_n(z)}{\partial z_n} \\
+    \end{bmatrix}
+\end{equation}
+
+
+is the Jacobian determinant of the transformation $\varphi$.
+
+
+If we parameterize the function $\varphi(z)=\varphi(z|\theta)$ by some parameters $\vec\theta$, we can tune them in such a way that the resulting distribution $q(\phi|\theta)$ approximates the target Boltzmann distribution $p$.    
+
+
+## Loss function
+
+
+The training is done by minimizing some loss function that is the measure of the difference between the distributions $p(\phi)$ and $q(\phi|\theta)$. Most common loss function is the Kullback-Leibler divergence
+
+
+$$D_{KL}(q|p)=\int\text{d}\phi\, q(\phi|\theta)\left(\log q(\phi|\theta)-\log p(\phi)\right)$$
+
+
+This function is not symmetric in its arguments and this form is often called _reverse_ Kullback-Leibler divergence because the target distribution appears as the second argument. 
+
+
+### Variational free energy
+
+
+In practice the partition function is not known and we are actually using
+
+
+$$P(\mathbf\phi)=e^{\displaystyle -S(\phi|m^2, \lambda)}=Z\cdot p(\phi)$$
+
+
+instead of $p$. Inserting $P$ instead of $p$ into the expression for the $D_{KL}$ we obtain
+
+
+$$F_q\equiv \int\text{d}\,\phi q(\phi|\theta)\left(\log q(\phi|\theta)-\log P(\phi)\right)=
+\int\text{d}\,\phi q(\phi|\theta)\left(\log q(\phi|\theta)-\log p(\phi)-\log Z\right)=
+F+D_{KL}(q|p)
+$$
+
+
+The free energy $F$ does not depend on the parameters $\theta$ so minimizing $F_q$ is the same as minimizing $D_{KL}$. Moreover the _variational energy_ $F_q$ is the upper bound for the free energy $F$. In case of a perfect training $p=q$, $D_{KL}(q|p)=0$ and $F_q = F$.  
+
+
+## Prior
+
+
+We choose uncorrelated Gaussian distributions with zero mean and variance equal to one as our prior distribution on $z$
+
+```{python}
+prior = neumc.nf.prior.SimpleNormal(torch.zeros(lattice_shape).to(device=torch_device, dtype=torch_float_dtype),
+                                    torch.ones(lattice_shape).to(device=torch_device, dtype=torch_float_dtype))
+```
+
+```{python}
+z = prior.sample_n(batch_size=2)
+z = z.to('cpu')
+z.shape
+```
+
+## Affine couplings
+
+
+The function $\varphi(z)$ to be of any practical use must be constructed in such a way that its jacobian is easily  constructed. One way of doing that is by using so called _affine coupling_ layers (see [arXiv:1410.8516v6](https://arxiv.org/abs/1410.8516v6)). We split the field $\phi$ into two parts $(\phi_1,\phi_2)$ using e.g. a checkerboard pattern. Then we transform the $\phi_1$ part using two functions of the $\phi_2$: $s(\phi_2)$ and $t(\phi_2)$. We call the $\phi_2$ part as _frozen_.
+
+
+\begin{equation}
+\begin{split}
+\phi'_1 &\leftarrow \phi_1 e^{\displaystyle s(\mathbf\phi_2)}+t(\mathbf\phi_2)   \\ 
+\phi'_2 &\leftarrow \phi_2.
+\end{split}
+\end{equation}
+
+
+The jacobian of this transformation is easy to compute as it is given  by the sum of the components of $s$
+
+
+$$
+\log J(z|\theta)=\sum_{i}s_i(\phi_2),
+$$
+
+
+Please note that this is a bijection with inverse transformation given by 
+
+
+\begin{equation}
+\begin{split}
+\phi_1 &\leftarrow (\phi_1'-t(\phi'_2))e^{\displaystyle - s(\mathbf\phi'_2)}   \\ 
+\phi_2 &\leftarrow \phi'_2.
+\end{split}
+\end{equation}
+
+
+In the next step we interchange the role of $\phi_1$ and $\phi_2$ parts i.e. part $\phi_1
+$ now becomes frozen. We then and stack some number of such layers pairs. Each layer has a separate set $s$ and $t$ functions.  The functions $s$ and $t$ are parameterized by parameters $\theta$: $s(\phi_i)=s(\phi_i|\theta_s)$, $t(\phi_i)=t(\phi_i|\theta_t)$. They are implemented by convolutional neural networks with $\theta$ being the weights of the network. Training consists of tuning the weights of $s$ and $t$ in each layer.
+
+
+In each layer the we have one convolutional neural network that takes the input of shape $(N_{batch},1,L,L)$ and produces output of shape $(N_{batch},2,L,L)$. The two output channels correspond to $s$ and $t$ respectively. Please note that although at each layer only the frozen part of the lattice is used to obtain $s$ and $t$, the whole lattice is used as an input. Choosing the right part is done by masking the other part by multiplying it with zeros. The function `neumc.nf.affine_cpl.make_checker_mask` creates such masks    
+
+```{python}
+mask0 = neumc.nf.scalar_masks.make_checker_mask((8, 8), parity=0, device='cpu')
+mask0
+```
+
+```{python}
+mask1 = neumc.nf.scalar_masks.make_checker_mask((8, 8), parity=1, device='cpu')
+mask1
+```
+
+The number of hidden convolutional layers and the number of channels in each, are set using the hidden_channels parameters which is an array containing the number of channel for each hidden layer.  The kernel size is the same for each convolutional layer and set using the kernel_size parameter which must be an odd number. The `LeakyReLU` activation layers are used between the convolutional layers. We use circular padding  which corresponds  with periodic boundary conditions used on implemented lattices. The size of the padding is so chosen as to obtain same output size as the input. The output is can passed to the <span style="font-family:monospace;">tanh</span> function if we want to restrict it to the interval (-1,1). This construction is implemented in the [neumc.nf.nn.make_conv_net](../../neumc/src/neumc/nf/nn.py) function.  
+
+```{python}
+hidden_channels = [16, 16, 16]
+kernel_size = 3
+net = neumc.nf.nn.make_conv_net(in_channels=1, hidden_channels=hidden_channels, out_channels=2,
+                                kernel_size=kernel_size, use_final_tanh=True, float_dtype=torch_float_dtype)
+```
+
+```{python}
+z = prior.sample_n(batch_size=2)
+z = z.to('cpu')
+z.shape
+```
+
+The convolutional network expects input of the shape $(2,1,8,8)$ so we have to 'unsqueeze' the second dimension.
+
+```{python}
+out = net((z * mask0).unsqueeze(1))
+out.shape
+```
+
+A single affine coupling layer is implemented as  [AffineCoupling](../../neumc/src/neumc/nf/affine_cpl.py) class in module [neumc.nf.affine_coupling](../../neumc/src/neumc/nf/affine_cpl.py). 
+
+```{python}
+mask_ = neumc.nf.scalar_masks.make_checker_mask((lattice_shape),parity=0, device='cpu')
+mask = {
+'active': mask_,
+'frozen': 1-mask_,  
+'passive': torch.zeros_like(mask_)  
+}
+```
+
+```{python}
+affine = neumc.nf.affine_cpl.AffineCoupling(net, mask = mask )
+```
+
+```{python}
+phi, log_J = affine(z)
+```
+
+```{python}
+phi.shape
+```
+
+```{python}
+phi[0] - z[0]
+```
+
+As we can see half of the lattice remains unchanged.
+
+
+ Function [make_scalar_affine_layers]((../../neumc/src/neumc/nf/affine_cpl.py)) in the same module constructs n\_layers of such layers  changing the mask parity at each layer. That is, each lattice site is updated n\_layers/2  number of times.
+
+```{python}
+n_layers = 16
+from neumc.nf.scalar_masks import stripe_masks_gen
+masks = neumc.nf.scalar_masks.checkerboard_masks_gen(lattice_shape=lattice_shape, device=torch_device)
+#masks = stripe_masks_gen(lattice_shape=lattice_shape, device=torch_device)
+layers = neumc.nf.affine_cpl.make_scalar_affine_layers(
+    lattice_shape=lattice_shape, n_layers=n_layers, hidden_channels=hidden_channels, kernel_size=kernel_size, masks=masks,
+    device=torch_device, float_dtype=torch_float_dtype)
+model = {'layers': layers, 'prior': prior}
+```
+
+Once we have the layers we can generate some configurations. We start by generating initial configurations from 
+the prior
+
+```{python}
+z = prior.sample_n(batch_size=2 ** 10)
+log_prob_z = prior.log_prob(z)
+```
+
+Next we pass those configurations through flow
+
+```{python}
+phi, log_J = layers(z)
+```
+
+Pass through the flow returns the transformed configurations as well as the logarithm of the Jacobian determinant of the transformation which we combine with the prior probability to get the probability of the transformed configurations 
+
+```{python}
+log_q_phi = log_prob_z - log_J
+```
+
+This is so common operation that there is special function sample that does jus that. 
+
+```{python}
+phi, log_q_phi = layers.sample(prior, batch_size=2 ** 10)
+```
+
+```{python}
+phi.shape
+```
+
+```{python}
+log_q_phi.shape
+#
+#
+```
+
+## Inverse normalizing flow transformation
+
+
+All normalizing flows are bijections, so they are invertible by definition. However, this does not mean that the inverse transformation is easy to compute and/or implemented. As already stated above, the affine coupling layers are easy to invert.  
+
+
+Applying this function to the configurations obtained above we should obtain the same $z$ configurations and same log probability 
+
+```{python}
+z = prior.sample_n(batch_size=2 ** 10)
+log_prob_z = prior.log_prob(z)
+phi, log_J = layers(z)
+log_q_phi = log_prob_z - log_J
+```
+
+```{python}
+zz, log_rev_J = layers.reverse(phi)
+log_qzz = log_q_phi - log_rev_J
+```
+
+to obtain starting prior configurations
+
+```{python}
+import warnings
+
+if not torch.allclose(z, zz, atol=1e-6):
+    warnings.warn("Reverse transformation failed")
+```
+
+As described above the J\_phi\_z is the logarithm of the Jacobian determinant of the transformation. To get the starting $z$ probability, we have to subtract it from the log\_q\_phi, according to the formula
+
+
+$$q(z)= q(\phi)\left|\det\frac{\partial z(\phi)}{\partial \phi}\right|^{-1}$$
+
+```{python}
+if not torch.allclose(log_qzz, log_prob_z, atol=1e-6):
+    warnings.warn("Reverse transformation does not conserve probability")
+```
+
+Such practical reversibility is very important for implementing gradient estimator such as REINFORCE  and path gradients. 
+
+```{python}
+with torch.no_grad():
+  log_q_phi_p = neumc.nf.flow.log_prob(phi, prior, layers)
+```
+
+```{python}
+if not torch.allclose(log_q_phi, log_q_phi_p, atol=1e-6):
+    warnings.warn("Reverse transformation does not conserve probability")
+```
+
+## Assessing the quality of the training
+
+```{python}
+import neumc.nf.flow as nf
+```
+
+Before starting training let's see how the untrained flow performs. To this end we will generate $2^{16}$ samples. For each sample $\phi$ we compute $\log q(\phi)$ and $\log P(\phi)$ and compare them to each other. For perfectly trained network we expect
+
+
+$$\log P(\phi) = \log q(\phi) + Z$$
+
+```{python}
+u_untr, lq_untr = nf.sample(batch_size=2 ** 10, n_samples=2 ** 16, prior=prior, layers=layers)
+lp_untr = -phi4_action(u_untr)
+```
+
+```{python}
+from scipy.stats import linregress
+```
+
+```{python}
+fit = linregress(lq_untr, lp_untr)
+print(f"log P = {fit.slope:.3f} log q + {fit.intercept:.3f}")
+```
+
+```{python}
+fig, ax = plt.subplots(figsize=(8, 8))
+ax.set_xlabel(r"$\log q$");
+ax.set_ylabel(r"$\log P$")
+lqs = np.linspace(lq_untr.min(), lq_untr.max(), 100);
+ax.scatter(lq_untr, lp_untr, s=5, alpha=0.25);
+ax.plot(lqs, lqs * fit.slope + fit.intercept, color='red', zorder=10);
+ax.text(0.15, .85, f"$\\log P = {fit.slope:.3}\\log q+{fit.intercept:.3f}$", transform=ax.transAxes);
+```
+
+As we can see we are way off from trained network. 
+
+
+### Importance weights
+
+
+Another way to asses the quality of training is to check the _importance weights_
+
+
+$$w(\phi)=\frac{P(\phi)}{q(\phi)}$$
+
+
+Again for perfectly trained network we expect all $w(\phi)=Z$. We can check this by looking at the histogram of $w$
+
+```{python}
+lw_untr = lp_untr - lq_untr
+```
+
+```{python}
+plt.hist(lw_untr, bins=120);
+```
+
+### ESS
+
+
+We notice a large variance which is an indicator of the poorly trained network. The variance of $w$ is directly tied to so called _effective sample size_ (ESS) which is often used as the measure of the quality of training.
+
+
+$$\operatorname{ESS}=\frac
+{\left\langle w\right\rangle^2}
+{\left\langle w^2\right\rangle} =
+\frac
+{\left\langle w\right\rangle^2}
+{\operatorname{var}\left[ w\right]+\left\langle w\right\rangle^2}
+=
+\frac{1}
+{\operatorname{var}\left[\frac{w}{\left\langle w\right\rangle}\right]+1}
+$$
+
+
+ESS is a number between zero and one the later indicating perfect training.
+
+```{python}
+from neumc.utils import ess_lw
+```
+
+```{python}
+ess_lw(lw_untr)
+```
+
+Here ESS is essentially zero indicating untrained network. 
+
+
+## Training
+
+
+As already mentioned training is done by tuning the paraneters of the $s$ and $t$ functions in each coupling layer as to minimize the Kullback-Leibler divergence between $q$ and $p$. This is done using _stochastic gradient descent_. At each step a batch of configurations $\phi$ is generated and the gradient of $D_{KL}(q|p)$ with respect to $\theta$ is calculated on this batch. The parameters  $\theta$ are updated by making a step in the direction inverse to the gradient
+
+
+$\theta \leftarrow \theta -\lambda\cdot\widehat{\operatorname{grad}} D_{KL}$.
+
+
+$\lambda$ is the so called _learning rate_ and is the single most important _hyperparameter_ influencing the training. The $\widehat{\operatorname{grad}}$ is an gradient estimator that can be implemented in different ways. The package implements three such estimators: reparameterization trick, REINFORCE and path gradient.   First two are described in [arXiv:2308.13294](https://arxiv.org/abs/2308.13294) and [arXiv:2202.01314](https://arxiv.org/abs/2202.01314). The path gradient estimator is described in [arXiv:2207.08219](https://arxiv.org/abs/2207.08219). 
+
+
+The simplest to implement estimator is bases on _reparameterization trick_:
+
+
+$$D_{KL}(q|p)=\int\text{d}\vec z\, q_z(\vec z)\left(\log q(\phi(\vec z)|\theta)-\log p(\phi(\vec z))\right)\approx
+\frac{1}{N}\sum_{i=1}^N\left(\log q(\phi(\vec z^i)|\theta)-\log p(\phi(\vec z^i))\right),\quad \vec z^i\sim q(\vec z^i)
+$$
+
+
+The expression on the right can be directly differentiated using the autodifferentiation capabilities of PyTorch.    
+
+
+The formula above could be called _vanilla_  stochastic descent and is rarely used. In practice more sophisticated algorithms are used  implemented in PyTorch as _optimizers_.  One popular choice is the `Adam` estimator. Additionally one may use a _scheduler_ which decreases the learning rate as the training progress. 
+
+```{python}
+optimizer = torch.optim.Adam(model['layers'].parameters(), lr=0.001)
+```
+
+```{python}
+N_era = 5
+N_epoch = 100
+print_freq = N_epoch
+batch_size = 2 ** 10
+```
+
+The `batch_size` parameter is a very important one. That is the amount of configurations that are going to be used to calculate the gradient estimator. With bigger batches we get smaller variance of the estimator and also better utilization of the GPU. However a bigger batch may not fit into the GPU memory. Also at certain size  the gains from bigger batch size may not compensate for the longer time needed to process the batch. 
+
+
+### Training loop 
+
+```{python}
+# %%time
+for era in range(N_era):
+    print(era, end=' ')
+    ess = 0.0
+    for epoch in range(N_epoch):
+        optimizer.zero_grad()
+
+        # Generate prior sample
+        z = prior.sample_n(batch_size=batch_size)
+        log_prob_z = prior.log_prob(z)
+
+        # Pass the prior configuration through the flow
+        phi, log_J = layers(z)
+        log_prob_q = log_prob_z - log_J
+        # Calculate the log of target probability (up to normalizing constant)
+        log_prob_p = -phi4_action(phi)
+
+        # Calculate the loss DKL (up to normalizing constant) 
+        loss = torch.mean(log_prob_q - log_prob_p)
+        # calculate gradients 
+        loss.backward()
+        # make the downward step
+        optimizer.step();
+    print(f"loss = {loss.detach():.2f}")
+```
+
+### "Loss" functions
+
+
+In the `neumc` the gradient estimator is abstracted as a _loss function_.  The loss function is should return a tuple `(loss, log_prob_q, log_prob_p)`. The loss is an expression that can be differentiated by calling `backward` on it. Below is the same training loop but using the loss function instead of explicit DKL calculations. You can change this function to any of the other two avalaible in `neumc`. For details see the [<span class="tt">neumc.train.loss</span> module](../../neumc/src/neumc/train/loss.py). 
+
+```{python}
+from neumc.training.gradient_estimator import REINFORCEEstimator, PathGradientEstimator, RTEstimator
+```
+
+```{python}
+n_layers = 16
+from neumc.nf.scalar_masks import stripe_masks_gen
+masks = neumc.nf.scalar_masks.checkerboard_masks_gen(lattice_shape=lattice_shape, device=torch_device)
+#masks = stripe_masks_gen(lattice_shape=lattice_shape, device=torch_device)
+layers = neumc.nf.affine_cpl.make_scalar_affine_layers(
+    lattice_shape=lattice_shape, n_layers=n_layers, hidden_channels=hidden_channels, kernel_size=kernel_size, masks=masks,
+    device=torch_device, float_dtype=torch_float_dtype)
+model = {'layers': layers, 'prior': prior}
+gradient_estimator = PathGradientEstimator(prior, layers, phi4_action, False)
+```
+
+```{python}
+optimizer = torch.optim.Adam(model['layers'].parameters(), lr=0.001)
+```
+
+```{python}
+# %%time
+for era in range(N_era):
+    print(era, end=' ')
+    ess = 0.0
+    for epoch in range(N_epoch):
+        optimizer.zero_grad()
+
+        # Generate prior sample
+        z = prior.sample_n(batch_size=batch_size)
+        log_prob_z = prior.log_prob(z)
+
+        # the "loss" function returns the expression to be differentiated
+        loss, log_prob_q, log_prob_p = gradient_estimator.forward_pass(z, log_prob_z)
+
+        # calculate gradients 
+        loss.backward()
+
+        # make the downward step
+        optimizer.step();
+    print(f"loss = {loss.detach():.2f} DKL = {(log_prob_q - log_prob_p).mean():.4f}")
+```
+
+The `GradientEstimator` has a method `step`, which can be used to sample from a prior automatically when we want to do a training step. It also can divide one step into multiple batches, becaue of that it calls `backward` inside, so we only need to do a step on the optimizer afterward.
+
+```{python}
+import neumc.utils.metrics as metrics
+```
+
+```{python}
+history = {
+    'loss': [],
+    'ess': [],
+    'dkl': [],
+    'std_dkl': []
+}
+```
+
+```{python}
+n_layers = 16
+from neumc.nf.scalar_masks import stripe_masks_gen
+from neumc.utils import ess, dkl
+masks = neumc.nf.scalar_masks.checkerboard_masks_gen(lattice_shape=lattice_shape, device=torch_device)
+#masks = stripe_masks_gen(lattice_shape=lattice_shape, device=torch_device)
+layers = neumc.nf.affine_cpl.make_scalar_affine_layers(
+    lattice_shape=lattice_shape, n_layers=n_layers, hidden_channels=hidden_channels, kernel_size=kernel_size, masks=masks,
+    device=torch_device, float_dtype=torch_float_dtype)
+model = {'layers': layers, 'prior': prior}
+gradient_estimator = RTEstimator(prior, layers, phi4_action, False)
+```
+
+```{python}
+optimizer = torch.optim.Adam(model['layers'].parameters(), lr=0.001)
+```
+
+```{python}
+import time
+
+start_time = time.time()
+era_start_time = start_time
+for era in range(N_era):
+    print(f"Era = {era:3d}")
+    for epoch in range(N_epoch):
+        optimizer.zero_grad()
+        loss_, logq, logp = gradient_estimator.step(batch_size)
+        optimizer.step()
+        mtrcs =             {
+                "loss": loss_.cpu().numpy().item(),
+                "ess": ess(logp, logq).cpu().numpy().item(),
+                "dkl": dkl(logp, logq).cpu().numpy().item(),
+                "std_dkl": (logp - logq).std().cpu().numpy().item(),
+            }
+        metrics.add_metrics(history, mtrcs)
+    metrics_avg = metrics.average_metrics(history=history, avg_last_N_epochs=N_epoch, keys=history.keys())
+    metrics.print_dict(metrics_avg)
+    t = time.time()
+    ellapsed_time = t - start_time
+    era_duration = t - era_start_time
+    print(f"ellapsed time = {ellapsed_time:.2f}s era duration = {era_duration:.2f}s")
+    era_start_time = t
+```
+
+## Sampling
+
+
+Let's look if the training did improve the performance of the model 
+
+```{python}
+u, lq = nf.sample(batch_size=batch_size, n_samples=2 ** 16, prior=prior, layers=layers)
+lp = -phi4_action(u)
+```
+
+```{python}
+fit = linregress(lq, lp)
+print(f"log P = {fit.slope:.3f} log q + {fit.intercept:.3f}")
+```
+
+```{python}
+fig, ax = plt.subplots(figsize=(8, 8))
+ax.set_aspect(1);
+ax.set_xlabel(r"$\log q$");
+ax.set_ylabel(r"$\log P$")
+lqs = np.linspace(lq.min(), lq.max(), 100);
+ax.scatter(lq, lp, s=5, alpha=0.25);
+ax.plot(lqs, lqs * fit.slope + fit.intercept, color='red', zorder=10);
+ax.text(0.15, .85, f"$\\log P = {fit.slope:.3}\\log q+{fit.intercept:.3f}$", transform=ax.transAxes);
+```
+
+While the thick cluster of points around the red line indicates that the network is not perfectly trained the slope of the line is almost exactly one, a big improvement. 
+
+
+The importance weights have one much smaller variance
+
+```{python}
+lw = lp - lq
+```
+
+```{python}
+plt.hist(lw, bins=120);
+```
+
+resulting in reasonably big ESS
+
+```{python}
+ess_lw(lw)
+```
+
+## Free energy
+
+```{python}
+if m2 > 0:
+    F_exact = neumc.physics.phi4.free_field_free_energy(L, m2)
+F_exact
+```
+
+### Variational
+
+
+The variational free energy can be approximately  as
+
+
+$$F_q\equiv \int\text{d}\,\phi q(\phi|\theta)\left(\log q(\phi|\theta)-\log P(\phi)\right)\approx
+\frac{1}{N}\sum_{i=0}^{N-1}\left(
+\log q(\phi^i)-\log(P(\phi^i)
+\right) = 
+\frac{1}{N}\sum_{i=0}^{N-1}\left(
+\log q(\phi^i)+S(\phi^i)
+\right)\qquad \phi^i\sim q(\phi^i) 
+$$
+
+
+Let's generate a four times bigger sample
+
+```{python}
+# %%time
+u, lq = nf.sample(batch_size=batch_size, n_samples=2 ** 18, prior=prior, layers=layers)
+lp = -phi4_action(u)
+lw = lp - lq
+```
+
+```{python}
+F_q = -lw.mean()
+print(f"F_q = {F_q:.4f}      F_q - F_exact = {F_q - F_exact:.4f}")
+```
+
+## Bootstrapping
+
+
+For error estimation we will use the bootstrapping technique. Let's assume that we have a sample $x_i$, $i=1,N$ and an estimator $\Theta[x_i]$. To estimate the error on this estimator (pun not intended) we proceed as follow:
+
+1. We first generate $M$ new samples $\hat{x}^j_i$ of length $N$, by drawing from $x_i$ __with replacement__.
+2. Next we calculate the value of estimator $\theta_j = \Theta[\hat{x}^j_i]$, $j=1,M$ on each sample. 
+3. The standard deviation of the sample $\theta_j$ is an estimator of standard deviation of estimator $\Theta$. 
+
+
+In our case the estimator $\Theta$ is just a mean of logarithm of importance weights so implementing  bootstrap is fairly easy
+
+```{python}
+n_boot_samples = 100
+boots = []
+for j in range(n_boot_samples):
+    x_hat = lw[torch.randint(len(lw), (len(lw),))]
+    boots.append(x_hat.mean())
+boots = torch.DoubleTensor(boots)
+boots.std()
+```
+
+This implemented as the <span class="tt">torch_bootstrap</span> function in <span class="tt">neumc.utils.stats.utils</span> module. Please refer to the documentation there. 
+
+```{python}
+from neumc.utils.stats_utils import torch_bootstrap
+```
+
+```{python}
+# %%time
+F_q, F_q_std = torch_bootstrap(-lw, n_samples=100, binsize=1)
+```
+
+```{python}
+if lam == 0.0:
+    print(f"Variational free energy F_q = {F_q:.2f}+/-{F_q_std:.3f}  F_q-F = {F_q - F_exact:.3f}")
+else:
+    print(f"Variational free energy F_q = {F_q:.2f}+/-{F_q_std:.3f}")
+```
+
+## Neural importance sampling
+
+
+Actually we can do much better :) Let's  consider the quantity
+
+
+$$\int\text{d}\phi\, q(\phi)w(\phi) = \int\text{d}\phi\, P(\phi) = Z\int\text{d}\phi\, p(\phi) = Z$$
+
+
+Again this quantity can be approximated by a mean
+
+
+$$Z=\int\text{d}\phi\,q(\phi) w(\phi)\approx \frac{1}{N}\sum_{i=0}^{N-1}w(\phi^i)\qquad \phi^i\sim q(\phi^i)$$
+
+
+Actually what we really need is the logarithm of $Z$. Calculating this by first by first exponentiating $\log w_i$ and then taking the mean and the log could result in large numerical error. Potentially it could result in overflow or under flow, as the intermediate values  can be very big or very small. It is better to use the 
+[<span class="tt">logsumexp</span>](https://pytorch.org/docs/stable/generated/torch.logsumexp.html) function that can handle  such situations.
+
+```{python}
+F_nis = -(torch.special.logsumexp(lw, 0) - np.log(len(lw)))
+F_nis
+```
+
+This is much closer to the exact value of the free energy
+
+```{python}
+print(f"F_NIS - F_exact = {F_nis - F_exact:.5f}")
+```
+
+To estimate the errors we will again use bootstrap, however as the estimator is no longer a simple mean, we will use a more general <span class="tt">bootstrapf</span> function. Instead of taking the mean of each bootstrap sample this functions applies to each of them function supplied as a parameter. 
+
+```{python}
+from neumc.utils.stats_utils import torch_bootstrapf
+```
+
+```{python}
+# %%time
+F_nis, F_nis_std = torch_bootstrapf(lambda x: -(torch.special.logsumexp(x, 0) - np.log(len(x))), lw,
+                                    n_samples=100,
+                                    binsize=1)
+```
+
+```{python}
+if lam == 0.0:
+    print(f"Variational free energy = {F_q:.2f} \u00b1 {F_q_std:.3f}  F_q-F = {F_q - F_exact:>7.4f}")
+    print(f"NIS free energy         = {F_nis:.2f} \u00b1 {F_nis_std:.3f}  F_q-F = {F_nis - F_exact:>7.4f}")
+else:
+    print(f"Variational free energy = {F_q:.2f} \u00b1 {F_q_std:.4f}")
+    print(f"NIS free energy         = {F_nis:.2f} \u00b1 {F_nis_std:.4f}")
+```
+
+Another quantity that can be analytically calculated for the free field is
+
+
+$$\sum_{i,j=0}^{L-1}\phi^2_{ij}$$
+
+
+
+
+
+It can be obtained by differentiating the free energy with respect to $m^2$ and is implemented as `phi2` function
+
+```{python}
+from neumc.physics.phi4 import phi2
+```
+
+```{python}
+phi2(L, m2) / (L * L)
+```
+
+```{python}
+torch.mean(torch.sum(u ** 2, dim=(1, 2)) / (L * L))
+```
+
+Because $q(\phi)\neq p(\phi)$ it falls short of the predicted value. 
+
+
+We can however again use NIS. For any  observable $O(\phi)$
+
+
+$$
+\begin{split}
+\left\langle O\right\rangle_p &= \int\text{d}\phi\,p(\phi) O(\phi)=\frac{1}{Z} \int\text{d}\phi\,q(\phi) w(\phi) O(\phi)\\
+&\approx \frac
+{\sum_{i=0}^{N-1}w(\phi^i)O(\phi^i)}
+{\sum_{i=0}^{N-1}w(\phi^i)}\qquad \phi^i \sim q(\phi^i)
+\end{split}
+$$ 
+
+
+This is implemented into the `torch_bootstrap` function. If we provide the $\log w$ it will automatically use them for NIS  
+
+```{python}
+phi2, phi2_std = torch_bootstrap(torch.sum(u ** 2, dim=(1, 2)) / (L * L), n_samples=100, binsize=1, logweights=lw)
+print(u'<sum phi_i^2> = {:.4f} \u00b1 {:.4f}'.format(phi2, phi2_std))
+```
+
+As we can see again the agreement is very good
+
+
+## Magnetization
+
+
+Finally we will check some observables related to magnetization
+
+
+$$M(\phi)=\sum_{i,j=0}^{L-1}\phi_{i,j}$$
+
+
+Because of the $Z_2$ symmetry, in principle 
+
+
+$$\langle M\rangle = 0$$
+
+
+That's why the module of magnetization is used instead
+
+
+$$\frac{\langle |M| \rangle}{L^2}$$ 
+
+
+This quantity becomes zero in the large $L$ limit in the unbroken phase and is non-zero in the broken symmetry (orddered) phase. For free field it is equal to
+
+
+$$\sqrt{\frac{2}{\pi}}\frac{1}{L\sqrt{m^2}}$$
+
+```{python}
+np.sqrt(2 / np.pi) / L * 1 / np.sqrt(m2)
+```
+
+Again the "raw" value does not agree with exact value, but after using NIS agreement is very good
+
+```{python}
+torch.mean(torch.abs(u.sum(dim=(1, 2))) / (L * L))
+```
+
+```{python}
+print(u'<|M|> = {:.4f} \u00b1 {:.4f}'.format(
+    *torch_bootstrap(torch.abs(torch.sum(u, dim=(1, 2))) / (L * L), n_samples=100, binsize=1, logweights=lw)))
+```
+
+And finally  we check
+
+
+$$\frac{\langle M^2\rangle}{L^2}$$ 
+
+
+This quantity for free field is equal to $\frac{1}{m^2}$ 
+
+```{python}
+1 / m2
+```
+
+```{python}
+torch_bootstrap(u.sum(dim=(1, 2)) ** 2 / (L * L), n_samples=100, binsize=1)
+```
+
+```{python}
+print(u'<M^2> = {:.3f} \u00b1 {:.4f}'.format(
+    *torch_bootstrap(torch.sum(u, dim=(1, 2)) ** 2 / (L * L), n_samples=100, binsize=1, logweights=lw)))
+```
+
+## Neural Markov Chain Monte-Carlo
+
+
+An alternative to NIS is to use the generated configurations as the proposal in Metropolis-Hastings algorithm. Lte's assume that the current configuration is $\phi^i$. We then generate a _trial_ configuration $\phi_{tr}$ from distribution $q(\phi_{tr})$ Then we _accept_ this configuration with probability 
+
+
+$$\min\left(1,
+\frac{p(\phi_{tr})}{p(\phi^{i})}
+\frac{q(\phi^i)}{q(\phi_{tr})}
+\right)$$
+
+
+If the trail configuration is accepted then $\phi^{i+1}=\phi_{tr}$ else $\phi^{i+1}=\phi^{i}$. Please note that this procedure introduces correlations. The above mentioned operation is implemented as `metropolize` function. 
+
+```{python}
+from neumc.mc import metropolize
+```
+
+```{python}
+u_mc, lq_mc, lp_mc, accepted = metropolize(u, lq, lp)
+```
+
+Array `accepted` contains zeros and ones indicating whether a configuration was rejected or accepted.
+
+```{python}
+accepted.mean()
+```
+
+In this case we not that almost 70% of all the configurations were accepted. 
+
+```{python}
+torch_bootstrap(torch.sum(u_mc ** 2, dim=(1, 2)) / (L * L), n_samples=100, binsize=1)
+```
+
+```{python}
+M = torch.sum(u_mc, dim=(1, 2))
+```
+
+Magnetization shows only mild correlations
+
+```{python}
+tau, ac = neumc.utils.stats_utils.ac_and_tau_int(M.numpy())
+print(f"Integrated correlation time = {tau:.2f}")
+```
+
+```{python}
+plt.scatter(np.arange(0, len(ac)), ac);
+```
+
+```{python}
+torch_bootstrap(torch.abs(M) / (L * L), n_samples=100, binsize=1)
+```
+
+```{python}
+torch_bootstrap(M ** 2 / (L * L), n_samples=100, binsize=1)
+```

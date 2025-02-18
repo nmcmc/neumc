@@ -1,0 +1,715 @@
+---
+jupyter:
+  jupytext:
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.2'
+      jupytext_version: 1.16.4
+  kernelspec:
+    display_name: Python 3 (ipykernel)
+    language: python
+    name: python3
+---
+
+```{python}
+# %load_ext autoreload
+# %autoreload 2
+```
+
+# U(1) Gauge model with circular splines coupling layer
+
+```{python}
+import torch
+import numpy as np
+import matplotlib.pyplot as plt    
+```
+
+```{python}
+import neumc
+```
+
+```{python}
+from  neumc.nf.u1_model_asm import assemble_model_from_dict
+```
+
+```{python}
+torch.__version__
+```
+
+```{python}
+from scipy.special import iv
+from scipy.stats import linregress
+```
+
+```{python}
+torch.cuda.is_available()
+```
+
+```{python}
+for dev in range(torch.cuda.device_count()):
+    print(torch.cuda.get_device_properties(dev))
+```
+
+```{python}
+torch_device="cuda:0"
+float_dtype=torch.float32
+```
+
+```{python}
+torch.cuda.get_device_properties(torch_device)
+```
+
+```{python}
+batch_size=2**10
+```
+
+```{python}
+import neumc.physics.u1 as u1
+import neumc.nf.flow as nf
+import neumc.nf.u1_equiv as equiv
+from neumc.utils import grab
+```
+
+```{python}
+L = 8
+lattice_shape = (L,L)
+link_shape = (2,L,L)
+```
+
+```{python}
+beta = 1
+u1_action = u1.U1GaugeAction(beta)
+```
+
+```{python}
+F_exact = -u1.logZ(L,beta)-2*L*L*np.log(2*np.pi)
+print(F_exact)
+```
+
+## Rational splines coupling
+
+
+In here we will use a coupling layers based on circular splines as described in [arXiv:2002.02428](https://arxiv.org/abs/2002.02428) and [arXiv:1906.04032](http://arxiv.org/abs/1906.04032). A more detailed description can be found in <span class="tt">rational_splines</span> notebook.
+
+```{python}
+import neumc.nf.cs_coupling as cs_cpl
+```
+
+We use same specification for the neural network, but the number of output channels will be different
+
+```{python}
+hidden_channels = [8,8]
+kernel_size = 3
+in_channels = 2
+dilation = 1
+```
+
+The splines are specified by providing the number of knots
+
+```{python}
+n_knots = 9  
+```
+
+```{python}
+out_channels = 3 * (n_knots - 1) + 1
+net = neumc.nf.nn.make_conv_net(
+    in_channels=in_channels,
+    out_channels=out_channels,
+    hidden_channels=hidden_channels,
+    kernel_size=kernel_size,
+    use_final_tanh=False
+)
+masks = neumc.nf.gauge_masks.u1_masks_gen(lattice_shape=lattice_shape, float_dtype=float_dtype,
+                                   device=torch_device)
+mask = next(masks)
+net.to(device=torch_device)
+plaq_coupling = cs_cpl.CSCoupling(
+    n_knots=n_knots, net=net, mask=mask[1] 
+)
+```
+
+```{python}
+prior = neumc.nf.prior.MultivariateUniform(torch.zeros(link_shape), 2*torch.pi*torch.ones(1), device=torch_device)
+```
+
+```{python}
+z = prior.sample_n(12)
+plaq = u1.compute_u1_plaq(z,mu=0,nu=1)
+```
+
+```{python}
+new_plaq, logJ = plaq_coupling(plaq)
+```
+
+Contrary to the non-compact projection circular splines have fast and precise inverse 
+
+```{python}
+plaq_p, log_z_p = plaq_coupling.reverse(new_plaq)
+```
+
+```{python}
+torch.abs(plaq[0]-plaq_p[0]).mean()
+```
+
+The construction of the model proceeds as in the U1 notebook. We use same masking pattern
+
+```{python}
+masks = neumc.nf.gauge_masks.u1_masks_gen(lattice_shape=lattice_shape, float_dtype=float_dtype, device=torch_device)
+```
+
+The <span class="tt">make_plaq_coupling function</span> has the same structure as before. What changes is the number of output channels that is needed to specify the knots position and the derivatives and the final plaquette coupling layer
+
+```{python}
+def make_plaq_coupling(mask):
+    out_channels = 3 * (n_knots - 1) + 1
+    net = neumc.nf.nn.make_conv_net(in_channels=in_channels,
+                        out_channels=out_channels,
+                        hidden_channels=hidden_channels,
+                        kernel_size=kernel_size,
+                        use_final_tanh=False,
+                        dilation=dilation)
+    net.to(torch_device)
+    return cs_cpl.CSCoupling(n_knots=n_knots, net=net, mask=mask)
+```
+
+Instead of constructing all the layers in loop as in the <span class="tt">U1</span> notebook, in here we will use the <span class="tt">u1_equiv.make_u1_equiv_layers</span> function that does just that
+
+```{python}
+n_layers = 16
+layers = neumc.nf.u1_equiv.make_u1_equiv_layers(loops_function=None,
+                                                make_plaq_coupling=make_plaq_coupling,
+                                                masks=masks, n_layers=n_layers, device=torch_device)
+```
+
+```{python}
+model={
+  'prior':prior,
+  'layers': layers
+}
+```
+
+```{python}
+z = prior.sample_n(1024)
+log_prob_z = prior.log_prob(z)
+torch_x, torch_log_J = layers(z)
+torch_logq = log_prob_z - torch_log_J
+```
+
+```{python}
+z_p, log_J_rev = layers.reverse(torch_x)
+log_prob_z_p = torch_logq -log_J_rev
+```
+
+```{python}
+torch.allclose(z_p,z, atol=1e-5)
+```
+
+```{python}
+torch.allclose(log_prob_z,log_prob_z_p,atol=1e-6)
+```
+
+```{python}
+N_era = 4
+N_epoch = 100
+print_freq = 100 # epochs
+plot_freq = 1 # epochs
+
+history = {
+    'dkl' : [],
+    'std_dkl': [],
+    'loss' : [],
+    'ess' : []
+}
+```
+
+```{python}
+from neumc.training.gradient_estimator import RTEstimator, PathGradientEstimator, REINFORCEEstimator
+import time
+```
+
+```{python}
+import sys
+sys.path.append('..')
+from  live_plot import  init_live_plot, update_plots
+import neumc.utils.metrics as um
+```
+
+```{python}
+# Training
+base_lr = .001
+optimizer = torch.optim.Adam(model['layers'].parameters(), lr=base_lr)
+```
+
+```{python}
+train_step = PathGradientEstimator(prior=prior, flow= layers, action=u1_action)
+```
+
+```{python}
+# %%time
+[plt.close(plt.figure(fignum)) for fignum in plt.get_fignums()] # close all existing figures
+live_plot = init_live_plot(N_era, N_epoch, metric='dkl')
+start_time = time.time()
+
+for era in range(N_era):
+    for epoch in range(N_epoch):
+      optimizer.zero_grad()
+      loss, log_q, log_p =train_step.step(batch_size=batch_size)
+      um.add_metrics(history, {
+                "loss": loss.cpu().numpy().item(),
+                "ess": neumc.utils.ess(log_p, log_q).cpu().numpy().item(),
+                "dkl": neumc.utils.dkl(log_p, log_q).cpu().numpy().item(),
+                "std_dkl": (log_p - log_q).std().cpu().numpy().item(),
+        })
+      optimizer.step()
+        
+      if epoch % print_freq == 0:
+            avg = um.average_metrics(history, N_epoch, history.keys())
+            ellapsed_time = time.time()-start_time
+            print(f"Era {era:3d} epoch {epoch:4d} ellapsed time {ellapsed_time:.1f}")
+            um.print_dict(avg)
+
+
+      if epoch % plot_freq == 0:
+            update_plots(history, **live_plot)
+
+```
+
+## Sampling
+
+
+Please refer to the $\phi^4$ notebook for the detailed explanation of concepts and quantities used in the  following.  
+
+
+The sampling function generates n_samples of configurations from the distribution $q$. The sampling is done in batches because the sample can be to big to fit on the GPU.
+
+```{python}
+# %%time
+u,lq = neumc.nf.flow.sample(n_samples=2**16, batch_size=2**10, prior=prior, layers=layers)
+```
+
+Calculating action, that is equal to $-\log p$, on the sample is also done in batches, for the same reason as above|
+
+```{python}
+lp = -neumc.utils.batch_function.batch_action(u,batch_size=1024, action=u1_action, device=torch_device)
+```
+
+The trained model has a decent effective sample size
+
+```{python}
+ess = neumc.utils.ess(lp,lq)
+print(f"ESS = {ess:.3f}")
+```
+
+```{python}
+fit = linregress(lq, lp)
+print(f"log P = {fit.slope:.3f} log q + {fit.intercept:.3f}")
+```
+
+```{python}
+fig, ax = plt.subplots(figsize=(8,8))
+ax.set_aspect(1);ax.set_xlabel(r"$\log q$");ax.set_ylabel(r"$\log P$")
+lqs = np.linspace(lq.min(), lq.max(),100);
+ax.scatter(lq,lp,s=5, alpha=0.25);
+ax.plot(lqs, lqs*fit.slope+fit.intercept, color='red',zorder=10);
+ax.text(0.15, .85,f"$\\log P = {fit.slope:.3}\\log q+{fit.intercept:.3f}$", transform=ax.transAxes);
+```
+
+## Free energy
+
+
+As described in the $\phi^4$ notebook the variational free energy is given by the $D_{KL}$
+
+```{python}
+F_q = neumc.utils.dkl(lp,lq)
+print(f"F_q = {F_q:.3f} F_q-F_exact = {F_q-F_exact:.4f}")
+```
+
+Please note that the relative error is below $1\perthousand$
+
+```{python}
+print(f"{(F_q-F_exact)/np.abs(F_exact):.5f}")
+```
+
+The statistical error can be calculated using the bootstrap
+
+```{python}
+from neumc.utils.stats_utils import torch_bootstrap, torch_bootstrapf
+```
+
+```{python}
+lw = lp-lq
+```
+
+```{python}
+# %%time
+F_q, F_q_std = torch_bootstrap(-lw, n_samples=100, binsize=1)
+```
+
+```{python}
+print(f"F_q = {F_q:.4f}+/-{F_q_std:.4f}")
+```
+
+The statistical error is much less than the difference indicating that the variational estimate is biased. As explained in the$\phi^4$ notebook we can use the _importance  weights_ 
+
+
+$$w(u)=\frac{p(u)}{q(u)}$$
+
+
+to obtain an (almost)unbiased estimate
+
+```{python}
+# %%time
+F_nis, F_nis_std = torch_bootstrapf(lambda x: -(torch.special.logsumexp(x, 0) - np.log(len(x))), lw,
+                                    n_samples=100,
+                                    binsize=1)
+```
+
+```{python}
+print(f"F_NIS = {F_nis:.3f}+/-{F_nis_std:.4f} F_NIS-F_exact = {F_nis-F_exact:.4f}")
+```
+
+## Neural Markov Chain Monte-Carlo
+
+```{python}
+from neumc.mc import metropolize
+```
+
+```{python}
+u_p, s_p, s_q, accepted = metropolize(u, lq, lp)
+```
+
+```{python}
+print("Accept rate:", grab(accepted).mean())
+```
+
+```{python}
+Q = grab(u1.topo_charge(u_p))
+plt.figure(figsize=(5,3.5), dpi=125)
+plt.plot(Q)
+plt.xlabel(r'$t_{MC}$')
+plt.ylabel(r'topological charge $Q$')
+plt.show()
+```
+
+```{python}
+from neumc.utils.stats_utils import bootstrap
+```
+
+```{python}
+X_mean, X_err = bootstrap(Q**2, n_samples=100, binsize=16)
+print(f'Topological susceptibility = {X_mean:.2f} +/- {X_err:.2f}')
+```
+## Rational splines coupling with different masking patterns
+
+```{python}
+from mask_plots import plot_plaq_mask, loop
+```
+
+```{python}
+masks_gen = neumc.nf.gauge_masks.sch_masks_gen(lattice_shape=(L, L), float_dtype=float_dtype, device='cpu')
+masks = [next(masks_gen) for i in range(8)]
+```
+
+```{python}
+fig, ax = plt.subplots(figsize=(4,4))
+ax.set_aspect(1)
+plot_plaq_mask(ax, masks[6]);
+```
+
+```{python}
+fig, ax = plt.subplots(2,4,figsize=(20,10))
+plt.subplots_adjust(hspace=0, wspace=0)
+axs = ax.ravel()
+for i in range(8):
+    plot_plaq_mask(axs[i], masks[i]);
+```
+
+```{python}
+masks = neumc.nf.gauge_masks.sch_masks_gen(lattice_shape=(L, L),
+                                           float_dtype=float_dtype, device=torch_device)
+```
+
+```{python}
+def make_plaq_coupling(mask):
+    out_channels = 3 * (n_knots - 1) + 1
+    net = neumc.nf.nn.make_conv_net(in_channels=in_channels,
+                        out_channels=out_channels,
+                        hidden_channels=hidden_channels,
+                        kernel_size=kernel_size,
+                        use_final_tanh=False,
+                        dilation=dilation)
+    net.to(torch_device)
+    return cs_cpl.CSCoupling(n_knots=n_knots, net=net, mask=mask)
+```
+
+```{python}
+n_layers = 16
+layers = neumc.nf.u1_equiv.make_u1_equiv_layers(loops_function=None,
+                                                make_plaq_coupling=make_plaq_coupling,
+                                                masks=masks, n_layers=n_layers, device=torch_device)
+```
+
+```{python}
+model={
+  'prior':prior,
+  'layers': layers
+}
+```
+
+```{python}
+N_era = 4
+N_epoch = 100
+print_freq = 100 # epochs
+plot_freq = 1 # epochs
+
+history = {
+    'dkl' : [],
+    'std_dkl': [],
+    'loss' : [],
+    'ess' : []
+}
+```
+
+```{python}
+# Training
+base_lr = .001
+optimizer = torch.optim.Adam(model['layers'].parameters(), lr=base_lr)
+#optimizer = to
+```
+
+```{python}
+train_step2 = PathGradientEstimator(prior=prior, flow = layers, action=u1_action)
+```
+
+```{python}
+# %%time
+[plt.close(plt.figure(fignum)) for fignum in plt.get_fignums()] # close all existing figures
+live_plot = init_live_plot(N_era, N_epoch, metric='dkl')
+start_time = time.time()
+
+for era in range(N_era):
+    for epoch in range(N_epoch):
+        optimizer.zero_grad()  
+        loss, log_q, log_p = train_step2.step(batch_size=batch_size)
+        optimizer.step()
+        um.add_metrics(history, {
+                "loss": loss.cpu().numpy().item(),
+                "ess": neumc.utils.ess(log_p, log_q).cpu().numpy().item(),
+                "dkl": neumc.utils.dkl(log_p, log_q).cpu().numpy().item(),
+                "std_dkl": (log_p - log_q).std().cpu().numpy().item(),
+        })
+        
+        if epoch % print_freq == 0:
+            avg = um.average_metrics(history, N_epoch, history.keys())
+            ellapsed_time = time.time()-start_time
+            print(f"Era {era:3d} epoch {epoch:4d} ellapsed time {ellapsed_time:.1f}")
+            um.print_dict(avg)
+
+        if epoch % plot_freq == 0:
+            update_plots(history, **live_plot)
+```
+
+### Sampling
+
+```{python}
+# %%time
+u_sch, lq_sch = neumc.nf.flow.sample(n_samples=2**16, batch_size=2**10, prior=prior, layers=layers)
+```
+
+```{python}
+lp_sch = -neumc.utils.batch_function.batch_action(u_sch,batch_size=1024, action=u1_action, device=torch_device)
+```
+
+```{python}
+ess_sch = neumc.utils.ess(lp_sch,lq_sch)
+print(f"ESS = {ess_sch:.3f}  change {100*(ess_sch-ess)/ess:.1f}%")
+```
+
+## Free energy
+
+```{python}
+lw_sch = lp_sch-lq_sch
+```
+
+```{python}
+# %%time
+F_q_sch, F_q_std_sch = torch_bootstrap(-lw_sch, n_samples=100, binsize=1)
+```
+
+```{python}
+print(f"F_q = {F_q_sch:.4f}+/-{F_q_std_sch:.4f}  F_q-F_exact = {F_q_sch - F_exact:.5f}")
+```
+
+```{python}
+# %%time
+F_nis_sch, F_nis_std_sch = torch_bootstrapf(lambda x: -(torch.special.logsumexp(x, 0) - np.log(len(x))), 
+                                    lw_sch, n_samples=100, binsize=1)
+```
+
+```{python}
+print(f"F_NIS = {F_nis_sch:.3f}+/-{F_nis_std_sch:.4f} F_NIS-F_exact = {F_nis_sch-F_exact:.4f}")
+```
+
+## Rational splines coupling with $2\times 1$ loops
+
+```{python}
+from mask_plots import loop, plot_plaq_mask
+fig, ax = plt.subplots(figsize=(4,4))
+ax.set_aspect(1.0)
+#
+ax.axis('off')
+loop(ax,0,0,'urrdll',l=0.035, d=0.05, color='red')
+loop(ax,0,0,'uurddl', l=0.035, d= 0.075, color='blue')
+```
+
+```{python}
+masks = neumc.nf.gauge_masks.sch_2x1_masks_gen(lattice_shape=(8, 8),
+                                               float_dtype=float_dtype, device=torch_device)
+```
+
+```{python}
+mask0 =next(masks)
+```
+
+```{python}
+mask0[1][0]
+```
+
+```{python}
+mask0[1][1]
+```
+
+```{python}
+masks = neumc.nf.gauge_masks.sch_2x1_masks_gen(lattice_shape=(L, L),
+                                               float_dtype=float_dtype, device=torch_device)
+```
+
+```{python}
+in_channels = 6
+```
+
+```{python}
+def make_plaq_coupling(mask):
+    out_channels = 3 * (n_knots - 1) + 1
+    net = neumc.nf.nn.make_conv_net(in_channels=in_channels,
+                        out_channels=out_channels,
+                        hidden_channels=hidden_channels,
+                        kernel_size=kernel_size,
+                        use_final_tanh=False,
+                        dilation=dilation)
+    net.to(torch_device)
+    return cs_cpl.CSCoupling(n_knots=n_knots, net=net, mask=mask)
+```
+
+```{python}
+n_layers = 16
+loops_function = lambda x: [u1.compute_u1_2x1_loops(x)]
+layers = neumc.nf.u1_equiv.make_u1_equiv_layers(loops_function=loops_function,
+                                                make_plaq_coupling=make_plaq_coupling,
+                                                masks=masks, n_layers=n_layers, device=torch_device)
+```
+
+```{python}
+model={
+  'prior':prior,
+  'layers': layers
+}
+```
+
+```{python}
+N_era = 4
+N_epoch = 100
+print_freq = 100 # epochs
+plot_freq = 1 # epochs
+
+history = {
+    'dkl' : [],
+    'std_dkl': [],
+    'loss' : [],
+    'ess' : []
+}
+```
+
+```{python}
+# Training
+base_lr = .001
+optimizer = torch.optim.Adam(model['layers'].parameters(), lr=base_lr)
+#optimizer = to
+```
+
+```{python}
+train_step3 = PathGradientEstimator(prior,layers, u1_action)
+```
+
+```{python}
+# %%time
+[plt.close(plt.figure(fignum)) for fignum in plt.get_fignums()] # close all existing figures
+live_plot = init_live_plot(N_era, N_epoch, metric='dkl')
+start_time = time.time()
+
+for era in range(N_era):
+    for epoch in range(N_epoch):
+        optimizer.zero_grad()
+        loss, log_q, log_p = train_step3.step(batch_size=batch_size)
+        optimizer.step()
+      
+        um.add_metrics(history, {
+                "loss": loss.cpu().numpy().item(),
+                "ess": neumc.utils.ess(log_p, log_q).cpu().numpy().item(),
+                "dkl": neumc.utils.dkl(log_p, log_q).cpu().numpy().item(),
+                "std_dkl": (log_p - log_q).std().cpu().numpy().item(),
+        })
+        
+        if epoch % print_freq == 0:
+            avg = um.average_metrics(history, N_epoch, history.keys())
+            ellapsed_time = time.time()-start_time
+            print(f"Era {era:3d} epoch {epoch:4d} ellapsed time {ellapsed_time:.1f}")
+            um.print_dict(avg)
+
+        if epoch % plot_freq == 0:
+            update_plots(history, **live_plot)
+```
+
+### Sampling
+
+```{python}
+# %%time
+u_2x1, lq_2x1 = neumc.nf.flow.sample(n_samples=2**16, batch_size=2**10, prior=prior, layers=layers)
+```
+
+```{python}
+lp_2x1 = -neumc.utils.batch_function.batch_action(u_2x1,batch_size=1024, action=u1_action, 
+                                           device=torch_device)
+```
+
+```{python}
+ess_2x1 = neumc.utils.ess_lw((lq_2x1-lp_2x1))
+print(f"ESS = {ess_2x1:.3f}  change {100*(ess_2x1-ess_sch)/ess_sch:.1f}%")
+```
+
+## Free energy
+
+```{python}
+lw_2x1 = lp_2x1-lq_2x1
+```
+
+```{python}
+# %%time
+F_q_2x1, F_q_std_2x1 = torch_bootstrap(-lw_2x1, n_samples=100, binsize=1)
+```
+
+```{python}
+print(f"F_q = {F_q_2x1:.4f}+/-{F_q_std_2x1:.4f}  F_q-F_exact = {F_q_2x1 - F_exact:.5f}")
+```
+
+```{python}
+# %%time
+F_nis_2x1, F_nis_std_2x1 = torch_bootstrapf(
+  lambda x: -(torch.special.logsumexp(x, 0) - np.log(len(x))), 
+                                    lw_2x1, n_samples=100, binsize=1)
+```
+
+```{python}
+print(f"F_NIS = {F_nis_2x1:.3f}+/-{F_nis_std_2x1:.4f} F_NIS-F_exact = {F_nis_2x1-F_exact:.4f}")
+```

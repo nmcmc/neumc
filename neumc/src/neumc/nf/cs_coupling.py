@@ -1,5 +1,5 @@
+from typing import Sequence
 import torch
-import numpy as np
 
 from neumc.nf.coupling_flow import CouplingLayer
 from neumc.physics.u1 import torch_mod
@@ -96,7 +96,7 @@ class CSConditioner(torch.nn.Module):
 
 class CSCoupling(CouplingLayer):
     def __init__(
-            self, net: torch.nn.Module, mask: dict[str, torch.Tensor], n_knots: int
+            self, net: torch.nn.Module, mask: dict[str, torch.Tensor] | Sequence[dict[str, torch.Tensor]], n_knots: int
     ):
         super().__init__(
             conditioner=CSConditioner(net, n_knots), transform=cs_coupling, mask=mask
