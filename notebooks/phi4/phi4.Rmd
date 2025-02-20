@@ -114,7 +114,7 @@ $$\sum_{i,j}\phi_{i+1,j}^2=\sum_{i,j}\phi_{i,j+j}^2=\sum_{i,j}\phi_{i,j}^2$$
 ## $\phi^4$ potential
 
 
-The second term in the expression above defines the _potential_.  Please note that parameter $m^2$ can be negative. For $\lambda>0$ and $m^2<0$ this potential has two minima and can lead to _spontaneous symmetry breaking_ signaling a _phase transition_ from disordered to ordered state. This is described in more detail in the ssb (spontaneous symmetry breaking) notebook.
+The second term in the expression above defines the _potential_.  Please note that parameter $m^2$ can be negative. For $\lambda>0$ and $m^2<0$ this potential has two minima and can lead to _spontaneous symmetry breaking_ signaling a _phase transition_ from disordered to ordered state.
 
 ```{python}
 xs = np.linspace(-4, 4, 500)
@@ -289,7 +289,7 @@ Please note that this is a bijection with inverse transformation given by
 
 
 In the next step we interchange the role of $\phi_1$ and $\phi_2$ parts i.e. part $\phi_1
-$ now becomes frozen. We then and stack some number of such layers pairs. Each layer has a separate set $s$ and $t$ functions.  The functions $s$ and $t$ are parameterized by parameters $\theta$: $s(\phi_i)=s(\phi_i|\theta_s)$, $t(\phi_i)=t(\phi_i|\theta_t)$. They are implemented by convolutional neural networks with $\theta$ being the weights of the network. Training consists of tuning the weights of $s$ and $t$ in each layer.
+$ now becomes frozen. We then stack some number of such layers pairs. Each layer has a separate set $s$ and $t$ functions.  The functions $s$ and $t$ are parameterized by parameters $\theta$: $s(\phi_i)=s(\phi_i|\theta_s)$, $t(\phi_i)=t(\phi_i|\theta_t)$. They are implemented by convolutional neural networks with $\theta$ being the weights of the network. Training consists of tuning the weights of $s$ and $t$ in each layer.
 
 
 In each layer the we have one convolutional neural network that takes the input of shape $(N_{batch},1,L,L)$ and produces output of shape $(N_{batch},2,L,L)$. The two output channels correspond to $s$ and $t$ respectively. Please note that although at each layer only the frozen part of the lattice is used to obtain $s$ and $t$, the whole lattice is used as an input. Choosing the right part is done by masking the other part by multiplying it with zeros. The function `neumc.nf.affine_cpl.make_checker_mask` creates such masks    
@@ -389,7 +389,7 @@ Pass through the flow returns the transformed configurations as well as the loga
 log_q_phi = log_prob_z - log_J
 ```
 
-This is so common operation that there is special function sample that does jus that. 
+This is so common operation that there is special function sample that does just that. 
 
 ```{python}
 phi, log_q_phi = layers.sample(prior, batch_size=2 ** 10)
@@ -553,7 +553,7 @@ As already mentioned training is done by tuning the paraneters of the $s$ and $t
 $\theta \leftarrow \theta -\lambda\cdot\widehat{\operatorname{grad}} D_{KL}$.
 
 
-$\lambda$ is the so called _learning rate_ and is the single most important _hyperparameter_ influencing the training. The $\widehat{\operatorname{grad}}$ is an gradient estimator that can be implemented in different ways. The package implements three such estimators: reparameterization trick, REINFORCE and path gradient.   First two are described in [arXiv:2308.13294](https://arxiv.org/abs/2308.13294) and [arXiv:2202.01314](https://arxiv.org/abs/2202.01314). The path gradient estimator is described in [arXiv:2207.08219](https://arxiv.org/abs/2207.08219). 
+$\lambda$ is the so called _learning rate_ and is the single most important _hyperparameter_ influencing the training. The $\widehat{\operatorname{grad}}$ is an gradient estimator that can be implemented in different ways. The package implements three such estimators: reparameterization trick, REINFORCE and path gradient.  Reparametrization trick was introduced in [arXiv:13126114](https://arxiv.org/abs/1312.6114v11). First two are described in [arXiv:2308.13294](https://arxiv.org/abs/2308.13294) and [arXiv:2202.01314](https://arxiv.org/abs/2202.01314). The path gradient estimator is described in [arXiv:2207.08219](https://arxiv.org/abs/2207.08219). 
 
 
 The simplest to implement estimator is bases on _reparameterization trick_:
@@ -1007,7 +1007,7 @@ print(u'<M^2> = {:.3f} \u00b1 {:.4f}'.format(
 ## Neural Markov Chain Monte-Carlo
 
 
-An alternative to NIS is to use the generated configurations as the proposal in Metropolis-Hastings algorithm. Lte's assume that the current configuration is $\phi^i$. We then generate a _trial_ configuration $\phi_{tr}$ from distribution $q(\phi_{tr})$ Then we _accept_ this configuration with probability 
+An alternative to NIS is to use the generated configurations as the proposal in Metropolis-Hastings algorithm. Let's assume that the current configuration is $\phi^i$. We then generate a _trial_ configuration $\phi_{tr}$ from distribution $q(\phi_{tr})$ Then we _accept_ this configuration with probability 
 
 
 $$\min\left(1,

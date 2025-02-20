@@ -58,17 +58,6 @@ part of the action is the determinant of the Wilson-Dirac operator. We calculate
 build in `torch.logdet` function. Because of that, in practice, the model is limited to the small lattice sizes like
 20x20. It is not recommended to run the model without a modern GPU with at least 8GB of memory.
 
-## Analysis scripts
-
-### nmcmc
-
-This script takes as an
-argument the name of the file with the model trained by the `schwinger.py` script and loads the model. Next, it uses it
-to generate new configurations which are then used in the Neural Markov Chain Monte-Carlo (NMCMC) algorithm.
-
-```shell
-python ./scripts/nmcmc.py  out_schwinger/scwinger_REINFORCE_4x4.zip
-```
 
 ## Profiling scripts
 

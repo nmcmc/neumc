@@ -782,7 +782,10 @@ F_q = neumc.utils.dkl(lp, lq)
 print(f"F_q = {F_q:.3f} F_q-F_exact = {F_q - F_exact:.4f}")
 ```
 
-Please note that the relative error is below $1\perthousand$
+Please note that the relative error is about 1&permil;
+
+
+
 
 ```{python}
 print(f"{(F_q - F_exact) / np.abs(F_exact):.5f}")
