@@ -90,7 +90,8 @@ history = {
     "ess": [],  # effective sample size
 }
 
-grad_step = neumc.training.gradient_estimator.RTEstimator(prior, layers, action)
+grad_estimator_name = "RT"
+grad_estimator = getattr(neumc.training.gradient_estimator, f"{grad_estimator_name}Estimator")(prior, layers, action)
 
 optimizer = torch.optim.Adam(model["layers"].parameters(), lr=0.00025)
 
@@ -104,7 +105,7 @@ for era in range(n_eras):
     for epoch in range(n_epochs_per_era):
         optimizer.zero_grad()
 
-        loss_, logq, logp = grad_step.step(batch_size)
+        loss_, logq, logp = grad_estimator.step(batch_size)
 
         optimizer.step()
 
@@ -126,7 +127,7 @@ for era in range(n_eras):
                 era=era,
                 model_cfg=model_cfg,
                 **{"mass2": mass2, "lambda": lamda},
-                path=f"{OUTPUT_DIR}/phi4_{grad_step.__class__.__name__}_{L:02d}x{L:02d}.zip",
+                path=f"{OUTPUT_DIR}/phi4_{grad_estimator_name}_{L:02d}x{L:02d}.zip",
             )
             elapsed_time = time.time() - start_time
             avg = neumc.utils.metrics.average_metrics(
@@ -231,16 +232,3 @@ if n_samples > 0:
     else:
         print(f"<|M|> /({L}*{L}) = {mag_abs:.3f}+/-{mag_abs_std:.4f}")
 
-    # Correlation between the two components of the field
-    print(
-        f"Correlation (1,1) = {torch.mean(u[:, 0, 0] * u[:, 1, 1]):.4f}+/-{torch.std(u[:, 0, 0] * u[:, 1, 1]) / sqrt(n_samples):.4f}"
-    )
-    print(
-        f"Correlation (0,1) = {torch.mean(u[:, 0, 0] * u[:, 0, 1]):.4f}+/-{torch.std(u[:, 0, 0] * u[:, 0, 1]) / sqrt(n_samples):.4f}"
-    )
-    print(
-        f"Correlation (1,0) = {torch.mean(u[:, 0, 0] * u[:, 1, 0]):.4f}+/-{torch.std(u[:, 0, 0] * u[:, 1, 0]) / sqrt(n_samples):.4f}"
-    )
-    print(
-        f"Correlation x (1,1) = {torch.mean(u[:, 0, 1] * u[:, 1, 0]):.4f}+/-{torch.std(u[:, 0, 0] * u[:, 1, 1]) / sqrt(n_samples):.4f}"
-    )

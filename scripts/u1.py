@@ -8,12 +8,9 @@ and compares it to the exact value.
 """
 
 import time
+from pathlib import Path
 
-from neumc.training.gradient_estimator import (
-    PathGradientEstimator,
-    REINFORCEEstimator,
-    RTEstimator,
-)
+
 from neumc.utils.utils import dkl, ess
 from numpy import log
 import torch
@@ -22,6 +19,7 @@ import neumc
 import neumc.utils.metrics as metrics
 import neumc.utils.stats_utils as stats_utils
 
+
 print(f"Running on PyTorch {torch.__version__}")
 
 if torch.cuda.is_available():
@@ -29,6 +27,10 @@ if torch.cuda.is_available():
     print(f"Running on {torch.cuda.get_device_name()}")
 else:
     torch_device = "cpu"
+
+OUTPUT_DIR = "out_u1"
+output_dir_path = Path(OUTPUT_DIR)
+output_dir_path.mkdir(parents=True, exist_ok=True)
 
 n_eras = 2
 n_epochs_per_era = 100
@@ -120,9 +122,8 @@ layers = neumc.nf.u1_equiv.make_u1_equiv_layers(
 
 model = {"layers": layers, "prior": prior}
 
-# grad_step = PathGradientEstimator(prior, layers, action, False)
-# grad_step = REINFORCEEstimator(prior, layers, action, False)
-grad_step = RTEstimator(prior, layers, action, False)
+grad_estimator_name="RT"
+grad_estimator = getattr(neumc.training.gradient_estimator, f"{grad_estimator_name}Estimator")(prior, layers, action)
 
 history = {"dkl": [], "std_dkl": [], "loss": [], "ess": []}
 
@@ -137,7 +138,7 @@ print(f"Starting training: {n_eras} x {n_epochs_per_era} epochs")
 for era in range(n_eras):
     for epoch in range(n_epochs_per_era):
         optimizer.zero_grad()
-        loss_, logq, logp = grad_step.step(batch_size)
+        loss_, logq, logp = grad_estimator.step(batch_size)
         optimizer.step()
         metrics.add_metrics(
             history,
@@ -156,7 +157,7 @@ for era in range(n_eras):
                 scheduler=None,
                 era=era,
                 configuration=config,
-                path=f"u1_{loss}_{L:02d}x{L:02d}.zip",
+                path=f"{OUTPUT_DIR}/u1_{grad_estimator_name}_{L:02d}x{L:02d}.zip"
             )
             elapsed_time = time.time() - start_time
             avg = metrics.average_metrics(history, n_epochs_per_era, history.keys())
