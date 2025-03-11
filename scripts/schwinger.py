@@ -2,6 +2,7 @@
 
 import argparse
 import time
+from pathlib import Path
 
 import torch
 from numpy import log
@@ -10,8 +11,6 @@ import neumc
 import neumc.nf.cs_coupling as csc
 import neumc.physics.u1 as u1
 from neumc.nf.u1_equiv import U1GaugeEquivCouplingLayer
-from neumc.physics.schwinger import QEDAction
-from neumc.training.gradient_estimator import REINFORCEEstimator
 
 parser = argparse.ArgumentParser("Schwinger")
 
@@ -24,19 +23,24 @@ args = parser.parse_args()
 
 if torch.cuda.is_available():
     torch_device = "cuda"
+    print(f"Running on {torch.cuda.get_device_name()}")
 else:
     torch_device = "cpu"
+    print(f"Running on {neumc.utils.cpuinfo.get_processor_name()} CPU")
     print("Warning running on CPU will be much to slow")
 
 float_dtype = torch.float32
 
+OUTPUT_DIR = "out_schwinger"
+output_dir_path = Path(OUTPUT_DIR)
+output_dir_path.mkdir(parents=True, exist_ok=True)
 
 L = 8
 lattice_shape = (L, L)
 
 # Action
-beta=1.0
-kappa=0.276
+beta = 1.0
+kappa = 0.276
 qed_action = neumc.physics.schwinger.QEDAction(beta=beta, kappa=kappa)
 
 # Masks
@@ -53,14 +57,22 @@ in_channels = 6
 n_knots = 9
 out_channels = 3 * (n_knots - 1) + 1
 
-
 # Model
 n_layers = 48
 
 # Neural network
+
 hidden_channels = [64, 64]
 kernel_size = 3
 dilation = [1, 2, 3]
+
+model_cfg = {
+    "n_layers": n_layers,
+    "lattice_shape": lattice_shape,
+    "hidden_channels": hidden_channels,
+    "kernel_size": kernel_size,
+    "dilation": dilation
+}
 
 layers = []
 for l in range(n_layers):
@@ -99,7 +111,8 @@ optimizer = torch.optim.Adam(model.parameters(), lr=0.00025)
 batch_size = args.batch_size
 n_batches = args.n_batches
 
-grad_estimator = REINFORCEEstimator(
+grad_estimator_name = "REINFORCE"
+grad_estimator = getattr(neumc.training.gradient_estimator, f"{grad_estimator_name}Estimator")(
     prior=prior,
     flow=model,
     action=qed_action,
@@ -109,7 +122,7 @@ n_eras = args.n_eras
 n_epochs_per_era = args.n_updates_per_era
 
 print(f"Starting training: {n_eras} x {n_epochs_per_era} epochs")
-print_frequency = args.n_updates_per_era //4
+print_frequency = args.n_updates_per_era // 4
 elapsed_time = 0
 start_time = time.time()
 for era in range(n_eras):
@@ -122,15 +135,23 @@ for era in range(n_eras):
             n_batches=n_batches)
         total_ess += neumc.utils.ess(logp, logq)
         optimizer.step()
-        if (epoch+1) % print_frequency == 0:
+        if (epoch + 1) % print_frequency == 0:
             print(f"  Finished epoch {epoch}")
-
+            neumc.utils.checkpoint.safe_save_checkpoint(
+                model=model,
+                optimizer=optimizer,
+                scheduler=None,
+                era=era,
+                model_cfg=model_cfg,
+                **{"beta": beta, "kappa": kappa},
+                path=f"{OUTPUT_DIR}/sch_{grad_estimator_name}_{L:02d}x{L:02d}.zip",
+            )
 
     total_ess /= n_epochs_per_era
     elapsed_time = time.time() - start_time
     print(f"Finished era {era} ESS = {total_ess.item():.4f} elapsed time {elapsed_time:.1f}s")
 
-n_samples = 2**12
+n_samples = 2 ** 12
 n_boot_samples = 100
 
 if n_samples > 0:
