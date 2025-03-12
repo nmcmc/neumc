@@ -5,7 +5,7 @@ jupyter:
       extension: .Rmd
       format_name: rmarkdown
       format_version: '1.2'
-      jupytext_version: 1.16.4
+      jupytext_version: 1.16.2
   kernelspec:
     display_name: Python 3 (ipykernel)
     language: python
@@ -105,7 +105,7 @@ After expanding the squares in the first term we obtain
 We have used the fact that 
 
 
-$$\sum_{i,j}\phi_{i+1,j}^2=\sum_{i,j}\phi_{i,j+j}^2=\sum_{i,j}\phi_{i,j}^2$$
+$$\sum_{i,j}\phi_{i+1,j}^2=\sum_{i,j}\phi_{i,j+1}^2=\sum_{i,j}\phi_{i,j}^2$$
 
 
  The last expression is used to implement the action in the `neumc` package.

@@ -40,7 +40,7 @@ def make_conv_net(
         The list should have exactly `len(hidden_channels) + 1` elements.
 
     use_final_tanh
-        If true, the output of the last layer will be transformed by `tanh`. In the opposite case, the output
+        If true, 'tanh` will be used transform the output of the last layer. In the opposite case, the output
         of the last layer will be returned without any additional transformation.
 
     dilation
