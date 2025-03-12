@@ -8,10 +8,8 @@ for a given number of measurements reporting the mean and the standard deviation
 The model parameters can be specified in a JSON file. The default parameters are used if no file is specified.
 """
 
-from neumc.training.gradient_estimator import REINFORCEEstimator
 import torch
 import numpy as np
-
 
 import neumc
 from neumc.nf.u1_model_asm import assemble_model_from_dict
@@ -22,7 +20,7 @@ warming = 5
 measurements = 40
 include_prior_generation = True
 
-batch_size = 2**8
+batch_size = 2 ** 8
 
 L = 8
 
@@ -57,7 +55,7 @@ layers = model["layers"]
 
 prior = model["prior"]
 
-gradient_estimator = REINFORCEEstimator(prior, layers, qed_action, False)
+gradient_estimator = neumc.training.gradient_estimator.REINFORCEEstimator(prior, layers, qed_action, False)
 z = prior.sample_n(batch_size)
 log_prob_z = prior.log_prob(z)
 
@@ -115,12 +113,12 @@ for r in range(measurements):
 
 
 def parameters_string():
-    return f"L {L} batch-size {batch_size} loss {gradient_estimator.__class__.__name__}"
+    return f"L {L} batch-size {batch_size} Estimator {gradient_estimator.__class__.__name__}"
 
 
 print(
     parameters_string(),
-    " tot. {0:.2f}+/-{3:.3f} loss  {1:.2f}+/-{4:.3f} back. {2:.2f}+/-{5:.3f}".format(
+    " total {0:.2f}+/-{3:.3f} forward  {1:.2f}+/-{4:.3f} backward {2:.2f}+/-{5:.3f}".format(
         *(timings.mean(0) / 1000), *(timings.std(0) / 1000)
     ),
     flush=True,
