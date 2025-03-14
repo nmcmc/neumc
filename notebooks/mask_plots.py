@@ -1,4 +1,3 @@
-# This is the modified code from https://arxiv.org/abs/2101.08176 by M.S. Albergo et all.
 import numpy as np
 from matplotlib.patches import RegularPolygon
 
