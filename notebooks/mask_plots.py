@@ -1,3 +1,4 @@
+# This is the modified code from https://arxiv.org/abs/2101.08176 by M.S. Albergo et all.
 import numpy as np
 from matplotlib.patches import RegularPolygon
 
@@ -273,17 +274,14 @@ def link(ax, x, y, mu, *, color, d=0.05, **kwargs):
         ax.plot([x + d, x + 1 - d], [y, y], color=color, **kwargs)
 
 
-colors = {
-    "active": "orange",
-    "frozen": "green",
-    "passive": "magenta"
-}
+colors = {"active": "orange", "frozen": "green", "passive": "magenta"}
+
 
 def plot_plaq_mask(ax, mask):
     plaq_mask = mask[1][0]
     link_mask = mask[0]
 
-    L= plaq_mask['active'].shape[0]
+    L = plaq_mask["active"].shape[0]
     ax.set_axis_off()
     ax.set_xlim(-0.1, 8.1)
     ax.set_ylim(-0.1, 8.1)
@@ -304,12 +302,13 @@ def plot_plaq_mask(ax, mask):
 
 from matplotlib.patches import Circle
 
+
 def plot_scalar_mask(ax, mask):
     keys = list(mask.keys())
-    L0,L1 = mask[keys[0]].shape
+    L0, L1 = mask[keys[0]].shape
     ax.set_axis_off()
-    ax.set_xlim(-0.25, L1-1+.25)
-    ax.set_ylim(-0.25, L0-1+.25)
+    ax.set_xlim(-0.25, L1 - 1 + 0.25)
+    ax.set_ylim(-0.25, L0 - 1 + 0.25)
 
     ax.set_aspect(1.0)
     for i in range(L0):
@@ -318,14 +317,12 @@ def plot_scalar_mask(ax, mask):
             for k in keys:
                 if mask[k][i, j] == 1:
                     color = colors[k]
-                ax.add_patch(Circle((j,L0-1-i),0.2, edgecolor=None, facecolor=color))
+                ax.add_patch(
+                    Circle((j, L0 - 1 - i), 0.2, edgecolor=None, facecolor=color)
+                )
 
-def plot_grid(ax, lx, ly,*,lines=None, points=None):
+
+def plot_grid(ax, lx, ly, *, lines=None, points=None):
     for i in range(Lx):
         pass
     pass
-
-
-
-
-    
