@@ -65,3 +65,7 @@ it. The training typically takes less than a minute on a GPU and several minutes
 
 For details on other scripts, refer to the [scripts/README.md file](scripts/README.md).
 
+### Acknowledgements
+
+This research was funded in part by National Science Centre, Poland, grant No. 2021/43/D/ST2/03375.
+
